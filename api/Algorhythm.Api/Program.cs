@@ -28,7 +28,7 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("ClientPermission", policy =>
     {
-        policy.WithOrigins("http://localhost:5173")
+        policy.WithOrigins("http://localhost:5173", "https://green-grass-0fe8b9610.4.azurestaticapps.net")
               .AllowAnyHeader()
               .AllowAnyMethod();
     });
