@@ -1,6 +1,8 @@
 using Algorhythm.Api.Models;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
+using System.Net.Http.Json;
+using System.Text.Json;
 
 namespace Algorhythm.Api.Services;
 
@@ -9,6 +11,7 @@ public class MusicIntelligenceService
     private readonly IChatCompletionService _chatCompletionService;
     private readonly Kernel _kernel;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly string _geminiApiKey;
     private readonly string _lastFmApiKey;
     private readonly ISpotifyService _spotifyService;
 
@@ -23,7 +26,73 @@ public class MusicIntelligenceService
         _chatCompletionService = chatCompletionService;
         _httpClientFactory = httpClientFactory;
         _lastFmApiKey = configuration["LastFm:ApiKey"] ?? "";
+        _geminiApiKey = configuration["Gemini:ApiKey"] ?? "";
         _spotifyService = spotifyService;
+    }
+
+    private async Task<string> CallGeminiDirectAsync(string prompt, bool expectJson)
+    {
+        if (string.IsNullOrEmpty(_geminiApiKey)) return "Error: Missing API Key";
+
+        // Upgrading to the latest 2.5 Flash model as requested
+        var modelId = "gemini-2.5-flash"; 
+        var url = $"https://generativelanguage.googleapis.com/v1beta/models/{modelId}:generateContent?key={_geminiApiKey}";
+        
+        var requestBody = new
+        {
+            contents = new[]
+            {
+                new { parts = new[] { new { text = prompt } } }
+            }
+        };
+
+        var client = _httpClientFactory.CreateClient();
+        var response = await client.PostAsJsonAsync(url, requestBody);
+        
+        if (!response.IsSuccessStatusCode)
+        {
+             var error = await response.Content.ReadAsStringAsync();
+             
+             // DIAGNOSTIC CORE: If 404 (Model Not Found), ask the API what IS found.
+             if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+             {
+                 try 
+                 {
+                     var listUrl = $"https://generativelanguage.googleapis.com/v1beta/models?key={_geminiApiKey}";
+                     var listResponse = await client.GetFromJsonAsync<JsonElement>(listUrl);
+                     
+                     // Roughly parse the JSON to get "name" fields
+                     // Response format: { "models": [ { "name": "models/gemini-pro", ... } ] }
+                     var availableModels = "No models found in list.";
+                     
+                     if (listResponse.TryGetProperty("models", out var modelsElement))
+                     {
+                         var names = modelsElement.EnumerateArray()
+                                        .Select(m => m.GetProperty("name").GetString())
+                                        .Where(n => n != null && n.Contains("gemini"))
+                                        .Take(5) // Just take 5 relevant ones
+                                        .ToList();
+                         
+                         if (names.Any())
+                         {
+                             availableModels = string.Join(", ", names);
+                         }
+                     }
+                     
+                     throw new Exception($"404. Your API Key sees these models: {availableModels}");
+                 }
+                 catch (Exception listEx)
+                 {
+                     // If listing fails too, just return original error
+                     throw new Exception($"Gemini 404 (and ListModels failed: {listEx.Message}): {error}");
+                 }
+             }
+
+             throw new Exception($"Gemini HTTP {response.StatusCode}: {error}");
+        }
+
+        var json = await response.Content.ReadFromJsonAsync<GeminiResponse>();
+        return json?.Candidates?.FirstOrDefault()?.Content?.Parts?.FirstOrDefault()?.Text ?? "";
     }
 
     public async Task<List<ArtistNode>> GetRecommendationsAsync(string seedArtist, float targetValence, float targetEnergy, bool obscure, int quantity, bool eraMatch, bool enableAI)
@@ -34,7 +103,7 @@ public class MusicIntelligenceService
         // 2. Real Spotify feature enrichment
         var enriched = await EnrichWithAudioFeaturesAsync(candidates);
 
-        // 3. Filter with Gemini 3.0 Pro OR return raw list
+        // 3. Filter with Gemini
         if (enableAI)
         {
             return await FilterWithGeminiAsync(enriched, targetValence, targetEnergy, obscure, quantity, eraMatch);
@@ -44,46 +113,6 @@ public class MusicIntelligenceService
             // Just take top N and return
             return enriched.Take(quantity).ToList();
         }
-    }
-
-    private async Task<List<string>> FetchSimilarArtistsAsync(string artist)
-    {
-        // Keeping this for backward compatibility if needed, but main logic uses FetchSimilarArtistsWithImagesAsync
-        var results = await FetchSimilarArtistsWithImagesAsync(artist);
-        return results.Select(r => r.Name).ToList();
-    }
-
-    // --- Top Tracks Logic (Originally iTunes, now Spotify) ---
-    // --- Top Tracks Logic (Reverted to iTunes for reliable Audio Previews) ---
-    public async Task<List<TrackDto>> GetTopTracksAsync(string artist)
-    {
-        try
-        {
-            var client = _httpClientFactory.CreateClient();
-            // iTunes Search API: entity=song, limit=5
-            var url = $"https://itunes.apple.com/search?term={Uri.EscapeDataString(artist)}&entity=song&limit=5";
-            var response = await client.GetFromJsonAsync<ITunesSearchResponse>(url);
-
-            return response?.Results?.Select(t => new TrackDto(
-                t.TrackName, 
-                "Popular", // iTunes doesn't expose playcounts publicly
-                TimeSpan.FromMilliseconds(t.TrackTimeMillis).ToString(@"m\:ss"),
-                t.PreviewUrl
-            )).ToList() ?? new List<TrackDto>();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"iTunes Error: {ex.Message}");
-            return new List<TrackDto>();
-        }
-    }
-
-    private class ITunesSearchResponse { public List<ITunesTrack>? Results { get; set; } }
-    private class ITunesTrack 
-    { 
-        public string TrackName { get; set; } = ""; 
-        public long TrackTimeMillis { get; set; }
-        public string PreviewUrl { get; set; } = "";
     }
 
     private async Task<List<ArtistNode>> EnrichWithAudioFeaturesAsync(List<(string Name, string ImageUrl)> artists)
@@ -132,9 +161,6 @@ public class MusicIntelligenceService
                     Console.WriteLine($"Error enriching {artist.Name}: {ex.Message}");
                 }
 
-                // Log result for debugging
-                Console.WriteLine($"[Enrich] {artist.Name} -> Img: {(!string.IsNullOrEmpty(finalImage) ? "Yes" : "No")} ({finalImage}), V: {valence:F2}, E: {energy:F2}");
-
                 nodes.Add(new ArtistNode(
                     id: artist.Name, // Use Name as ID for deduplication
                     name: artist.Name,
@@ -153,6 +179,37 @@ public class MusicIntelligenceService
 
         await Task.WhenAll(tasks);
         return nodes.ToList();
+    }
+
+    public async Task<List<TrackDto>> GetTopTracksAsync(string artist)
+    {
+        try
+        {
+            var client = _httpClientFactory.CreateClient();
+            // iTunes Search API: entity=song, limit=5
+            var url = $"https://itunes.apple.com/search?term={Uri.EscapeDataString(artist)}&entity=song&limit=5";
+            var response = await client.GetFromJsonAsync<ITunesSearchResponse>(url);
+
+            return response?.Results?.Select(t => new TrackDto(
+                t.TrackName, 
+                "Popular", // iTunes doesn't expose playcounts publicly
+                TimeSpan.FromMilliseconds(t.TrackTimeMillis).ToString(@"m\:ss"),
+                t.PreviewUrl
+            )).ToList() ?? new List<TrackDto>();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"iTunes Error: {ex.Message}");
+            return new List<TrackDto>();
+        }
+    }
+
+    private class ITunesSearchResponse { public List<ITunesTrack>? Results { get; set; } }
+    private class ITunesTrack 
+    { 
+        public string TrackName { get; set; } = ""; 
+        public long TrackTimeMillis { get; set; }
+        public string PreviewUrl { get; set; } = "";
     }
 
     private async Task<List<ArtistNode>> FilterWithGeminiAsync(List<ArtistNode> candidates, float valence, float energy, bool obscure, int quantity, bool eraMatch)
@@ -177,8 +234,8 @@ public class MusicIntelligenceService
 
         try 
         {
-            var result = await _chatCompletionService.GetChatMessageContentAsync(prompt);
-            var responseText = result.Content?.Trim() ?? "[]";
+            var responseText = await CallGeminiDirectAsync(prompt, true);
+            responseText = responseText.Trim();
 
             // Clean Markdown if present
             if (responseText.StartsWith("```"))
@@ -231,8 +288,8 @@ public class MusicIntelligenceService
 
         try
         {
-            var result = await _chatCompletionService.GetChatMessageContentAsync(prompt);
-            return result.Content?.Trim() ?? $"{source} and {target} share a distinct musical style.";
+            var text = await CallGeminiDirectAsync(prompt, false);
+            return text.Trim();
         }
         catch (Exception ex)
         {
@@ -241,6 +298,12 @@ public class MusicIntelligenceService
         }
     }
     
+    // --- Gemini DTOs ---
+    private class GeminiResponse { public List<GeminiCandidate>? Candidates { get; set; } }
+    private class GeminiCandidate { public GeminiContent? Content { get; set; } }
+    private class GeminiContent { public List<GeminiPart>? Parts { get; set; } }
+    private class GeminiPart { public string Text { get; set; } = ""; }
+
     // --- New Helper to fetch data including images ---
     // Refactoring to Tuple for internal use
     private async Task<List<(string Name, string ImageUrl)>> FetchSimilarArtistsWithImagesAsync(string artist)

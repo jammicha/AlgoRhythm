@@ -58,7 +58,7 @@ const EdgeContextMenu = ({ x, y, source, target, onClose }: EdgeContextMenuProps
                 {explanation}
             </div>
 
-            <div className="absolute -bottom-1 left-4 w-3 h-3 bg-surface border-b border-r border-accent transform rotate-45"></div>
+
         </div>
     );
 };

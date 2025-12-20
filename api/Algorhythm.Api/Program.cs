@@ -11,9 +11,10 @@ builder.Services.AddOpenApi();
 // Add Semantic Kernel
 builder.Services.AddKernel();
 builder.Services.AddGoogleAIGeminiChatCompletion(
-    modelId: "gemini-3.0-flash-preview", // User requested 3.0 Flash Preview
+    modelId: "gemini-1.5-flash-001", // Using specific version tag
     apiKey: builder.Configuration["Gemini:ApiKey"] ?? "PLACEHOLDER_API_KEY"
 );
+Console.WriteLine("Gemini Model ID set to: gemini-1.5-flash-001");
 
 // Add HttpClient
 builder.Services.AddHttpClient("LastFm", client =>
