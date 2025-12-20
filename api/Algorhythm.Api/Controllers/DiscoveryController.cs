@@ -40,6 +40,13 @@ public class DiscoveryController : ControllerBase
 
 
 
+    [HttpPost("explain-connection")]
+    public async Task<IActionResult> ExplainConnection([FromBody] ExplainRequest request)
+    {
+        var explanation = await _service.ExplainConnectionAsync(request.Source, request.Target);
+        return Ok(new { Explanation = explanation });
+    }
+
     [HttpPost("analyze-taste")]
     public IActionResult AnalyzeTaste()
     {
@@ -47,4 +54,5 @@ public class DiscoveryController : ControllerBase
     }
 }
 
+public record ExplainRequest(string Source, string Target);
 public record RecommendationRequest(string SeedArtist, float Valence, float Energy, bool Obscure, int Quantity, bool EraMatch, bool EnableAI = true);

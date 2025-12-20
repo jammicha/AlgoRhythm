@@ -32,5 +32,4 @@ obj/
 .idea/
 .vscode/
 appsettings.json
-!appsettings.Development.json
-!appsettings.json
+appsettings.Development.json

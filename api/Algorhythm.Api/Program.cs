@@ -11,7 +11,7 @@ builder.Services.AddOpenApi();
 // Add Semantic Kernel
 builder.Services.AddKernel();
 builder.Services.AddGoogleAIGeminiChatCompletion(
-    modelId: "gemini-1.5-pro", // Changing to 1.5-pro as 3.0 might not be the exact string yet, or usually it's just a model ID string.
+    modelId: "gemini-3.0-flash-preview", // User requested 3.0 Flash Preview
     apiKey: builder.Configuration["Gemini:ApiKey"] ?? "PLACEHOLDER_API_KEY"
 );
 

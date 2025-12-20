@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useGraphStore } from './store/useGraphStore';
 import MusicGraph from './components/MusicGraph';
 import DiscoveryModal from './components/DiscoveryModal';
 import ContextMenu from './components/ContextMenu';
 import DeleteConfirmationModal from './components/DeleteConfirmationModal';
+import EdgeContextMenu from './components/EdgeContextMenu';
 import FavoritesSidebar from './components/FavoritesSidebar';
 import PreviewSidebar from './components/PreviewSidebar';
 import { Search, RotateCcw, RotateCw, ListMusic, Layout } from 'lucide-react';
@@ -94,6 +95,7 @@ function App() {
   const [deleteCandidate, setDeleteCandidate] = useState<string | null>(null);
   const [previewArtist, setPreviewArtist] = useState<{ name: string; tab: 'overview' | 'tracks' } | null>(null);
   const [layoutMode, setLayoutMode] = useState<'HOZ' | 'VERT'>('HOZ'); // Default: Horizontal Parents (Trees), Vertical Children (Lists)
+  const [isLayoutFrozen, setIsLayoutFrozen] = useState(false); // Toggle to freeze layout during expansion
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; visible: boolean; nodeId: string | null }>({
     x: 0,
@@ -102,17 +104,31 @@ function App() {
     nodeId: null
   });
 
-  const [dimensions, setDimensions] = useState({ w: window.innerWidth, h: window.innerHeight });
+  const [edgeContextMenu, setEdgeContextMenu] = useState<{ x: number; y: number; visible: boolean; source: string | null; target: string | null }>({
+    x: 0,
+    y: 0,
+    visible: false,
+    source: null,
+    target: null
+  });
 
-  // Click tracking refs for debounce logic
-  const lastClickTime = useRef<number>(0);
-  const lastClickNodeId = useRef<string | null>(null);
-  const clickTimeout = useRef<any | null>(null);
+  const [dimensions, setDimensions] = useState({ w: window.innerWidth, h: window.innerHeight });
 
   // -- (skipped lines) --
 
   {/* Organize Button (Bottom Left) */ }
-  <div className="absolute bottom-6 left-6 z-20">
+  {/* Organize Button (Bottom Left) */ }
+  <div className="absolute bottom-6 left-6 z-20 flex flex-col gap-2">
+    <button
+      onClick={() => setIsLayoutFrozen(!isLayoutFrozen)}
+      className={`flex items-center gap-2 px-4 py-3 border border-gray-700 rounded-full text-sm font-bold shadow-xl transition-all hover:scale-105 active:scale-95 ${isLayoutFrozen ? 'bg-accent text-background' : 'bg-surface hover:bg-gray-700'
+        }`}
+      title={isLayoutFrozen ? "Layout Frozen (New nodes won't move existing ones)" : "Layout Active (Auto-organize)"}
+    >
+      <Layout size={18} />
+      {isLayoutFrozen ? 'LAYOUT FROZEN' : 'FREEZE LAYOUT'}
+    </button>
+
     <button
       onClick={() => {
         const newMode = layoutMode === 'HOZ' ? 'VERT' : 'HOZ';
@@ -128,7 +144,7 @@ function App() {
       className="flex items-center gap-2 px-4 py-3 bg-surface border border-gray-700 rounded-full hover:bg-gray-700 text-sm font-bold shadow-xl transition-all hover:scale-105 active:scale-95"
       title={`Current: ${layoutMode === 'HOZ' ? 'Horizontal Trees' : 'Vertical Trees'}`}
     >
-      <Layout size={18} />
+      {layoutMode === 'HOZ' ? <RotateCw size={18} /> : <RotateCcw size={18} />}
       {layoutMode === 'HOZ' ? 'ORGANIZE ↕' : 'ORGANIZE ↔'}
     </button>
   </div>
@@ -143,6 +159,44 @@ function App() {
     console.log("Discovering for:", seed, quantity, obscure, eraMatch, enableAI);
 
     try {
+
+      // 1. ADD GHOST NODES
+      const center = originPos || { x: 0, y: 0 };
+      const radius = originPos ? 300 : 250;
+      const ghostIds: string[] = [];
+      const ghostNodes: Node[] = [];
+      const ghostEdges: Edge[] = [];
+
+      for (let i = 0; i < quantity; i++) {
+        const gId = `ghost-${Date.now()}-${i}`;
+        ghostIds.push(gId);
+        const angle = (i / quantity) * 2 * Math.PI;
+
+        ghostNodes.push({
+          id: gId,
+          type: 'ghost',
+          position: {
+            x: center.x + Math.cos(angle) * radius,
+            y: center.y + Math.sin(angle) * radius
+          },
+          data: { label: 'Loading...' }
+        });
+
+        if (seedId) {
+          ghostEdges.push({
+            id: `e-${seedId}-${gId}`,
+            source: seedId,
+            target: gId,
+            animated: true,
+            style: { stroke: '#4A5568', strokeDasharray: '5,5' }
+          });
+        }
+      }
+
+      // Append Ghosts immediately
+      appendGraph(ghostNodes, ghostEdges);
+
+      // 2. FETCH DATA
       const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5111'}/api/discovery/recommend`, {
         method: 'POST',
         headers: {
@@ -159,15 +213,22 @@ function App() {
         }),
       });
 
+      // 3. REMOVE GHOST NODES
+      // We manually verify and remove them from the store state before adding real ones
+      // Since 'removeNode' in store cascades, we might want a simpler 'removeGhost' or just filter.
+      // For now, simpler: filter out these IDs from current state.
+      const currentState = useGraphStore.getState();
+      const nodesWithoutGhosts = currentState.nodes.filter(n => !ghostIds.includes(n.id));
+      const edgesWithoutGhosts = currentState.edges.filter(e => !ghostEdges.some(ge => ge.id === e.id));
+
+      // Reset state to "clean" (without ghosts) before appending real
+      useGraphStore.getState().setGraph(nodesWithoutGhosts, edgesWithoutGhosts);
+
       if (!response.ok) {
         throw new Error(`API Error: ${response.statusText}`);
       }
 
       const data = await response.json();
-
-      const center = originPos || { x: 0, y: 0 };
-      // Increase radius slightly if we are expanding to give room
-      const radius = originPos ? 300 : 250;
 
       const newNodes = data.map((artist: any, index: number) => {
         // Deduplication: Check if this artist already exists (Case Insensitive)
@@ -271,6 +332,12 @@ function App() {
       // FORCE AUTO-LAYOUT following the current template
       // Wrap in timeout to ensure state is settled and avoid race conditions
       setTimeout(() => {
+        // CHECK IF LAYOUT IS FROZEN
+        if (isLayoutFrozen) {
+          console.log("[Discover] Layout Frozen. Skipping auto-layout.");
+          return;
+        }
+
         console.log(`[Discover] Triggering Auto-Layout. Current Global Nodes: ${useGraphStore.getState().nodes.length}`);
         const { nodes: updatedNodes, edges: updatedEdges } = useGraphStore.getState();
 
@@ -303,6 +370,25 @@ function App() {
       visible: true,
       nodeId: node.id
     });
+  };
+
+  const handleEdgeRightClick = (event: React.MouseEvent, edge: any) => {
+    event.preventDefault();
+    console.log("Edge Right Click Detected!", edge);
+
+    // Find node labels for source and target
+    const sourceNode = nodes.find(n => n.id === edge.source);
+    const targetNode = nodes.find(n => n.id === edge.target);
+
+    if (sourceNode?.data?.label && targetNode?.data?.label) {
+      setEdgeContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        visible: true,
+        source: sourceNode.data.label,
+        target: targetNode.data.label
+      });
+    }
   };
 
   const handleContextMenuClose = () => {
@@ -393,58 +479,31 @@ function App() {
         width={dimensions.w}
         height={dimensions.h}
         onNodeClick={(_, node) => {
-          // DEBOUNCED CLICK LOGIC
-          const now = Date.now();
-          const lastTime = lastClickTime.current;
-          const lastId = lastClickNodeId.current;
-
-          // Check for "Manual Double Click"
-          if (lastId === node.id && (now - lastTime) < 300) {
-            // DOUBLE CLICK DETECTED
-            if (clickTimeout.current) clearTimeout(clickTimeout.current);
-            lastClickTime.current = 0;
-            lastClickNodeId.current = null;
-
-            console.log('Double Click Detected (Debounced)', node);
-            if (node.data?.label) {
-              // Trigger Discovery
-              handleDiscover({
-                seed: node.data.label,
-                seedId: node.id,
-                originPos: node.position,
-                quantity: 3,
-                obscure: false,
-                eraMatch: false
-              });
-            }
-          } else {
-            // SINGLE CLICK START
-            lastClickTime.current = now;
-            lastClickNodeId.current = node.id;
-
-            // Wait 300ms to confirm it's not a double start
-            clickTimeout.current = setTimeout(() => {
-              // SINGLE CLICK CONFIRMED (Timeout fired)
-              // Always Select AND Open Sidebar immediately
-              useGraphStore.getState().selectNode(node.id);
-              if (node.data?.label) setPreviewArtist({ name: node.data.label, tab: 'overview' });
-
-              // Reset tracker
-              lastClickTime.current = 0;
-              lastClickNodeId.current = null;
-            }, 300);
+          // IMMEDIATE Select & Preview
+          useGraphStore.getState().selectNode(node.id);
+          if (node.data?.label) {
+            setPreviewArtist({ name: node.data.label, tab: 'overview' });
           }
         }}
         onPaneClick={() => {
           useGraphStore.getState().selectNode(null);
           setPreviewArtist(null);
         }}
-        onNodeDoubleClick={(event, _) => {
-          // Explicitly ignore native double click, we handle it via debounce above
-          // preventing the race condition where Single triggers Sidebar BEFORE Double triggers Discover
-          event.preventDefault();
+        onNodeDoubleClick={(_, node) => {
+          // IMMEDIATE Discovery
+          if (node.data?.label) {
+            handleDiscover({
+              seed: node.data.label,
+              seedId: node.id,
+              originPos: node.position,
+              quantity: 3,
+              obscure: false,
+              eraMatch: false
+            });
+          }
         }}
         onNodeRightClick={handleNodeRightClick}
+        onEdgeContextMenu={handleEdgeRightClick}
       />
 
       {/* Modals & Context Menus */}
@@ -499,6 +558,16 @@ function App() {
         }}
         count={deleteCandidate ? getDescendants(deleteCandidate).length : 0}
       />
+
+      {edgeContextMenu.visible && edgeContextMenu.source && edgeContextMenu.target && (
+        <EdgeContextMenu
+          x={edgeContextMenu.x}
+          y={edgeContextMenu.y}
+          source={edgeContextMenu.source}
+          target={edgeContextMenu.target}
+          onClose={() => setEdgeContextMenu(prev => ({ ...prev, visible: false }))}
+        />
+      )}
     </div>
   );
 }

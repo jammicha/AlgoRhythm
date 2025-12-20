@@ -136,7 +136,7 @@ public class MusicIntelligenceService
                 Console.WriteLine($"[Enrich] {artist.Name} -> Img: {(!string.IsNullOrEmpty(finalImage) ? "Yes" : "No")} ({finalImage}), V: {valence:F2}, E: {energy:F2}");
 
                 nodes.Add(new ArtistNode(
-                    id: Guid.NewGuid().ToString(),
+                    id: artist.Name, // Use Name as ID for deduplication
                     name: artist.Name,
                     imageUrl: !string.IsNullOrEmpty(finalImage) ? finalImage : $"https://placehold.co/200x200?text={Uri.EscapeDataString(artist.Name)}",
                     isFavorited: false,
@@ -155,26 +155,90 @@ public class MusicIntelligenceService
         return nodes.ToList();
     }
 
-    private Task<List<ArtistNode>> FilterWithGeminiAsync(List<ArtistNode> candidates, float valence, float energy, bool obscure, int quantity, bool eraMatch)
+    private async Task<List<ArtistNode>> FilterWithGeminiAsync(List<ArtistNode> candidates, float valence, float energy, bool obscure, int quantity, bool eraMatch)
     {
-        // For scaffold, we'll just take the top N to show the slider working.
-        // In real impl, we'd add these to the prompt.
-        
         var prompt = $@"
-        Analyze these artists based on the user's vibe:
-        Target Valence: {valence}
-        Target Energy: {energy}
+        You are a music expert API. 
+        Analyze these artists and select the best matches for this vibe:
+        Target Valence (0.0 sad/dark -> 1.0 happy/positive): {valence}
+        Target Energy (0.0 calm -> 1.0 intense): {energy}
         Obscurity Preferred: {obscure}
         Era Match: {eraMatch}
         
-        Candidates:
-        {string.Join("\n", candidates.Select(c => $"- {c.Id} (Valence: {c.AudioFeatures.Valence}, Energy: {c.AudioFeatures.Energy})"))}
+        Candidates (JSON format):
+        {System.Text.Json.JsonSerializer.Serialize(candidates.Select(c => new { c.Id, c.AudioFeatures.Valence, c.AudioFeatures.Energy, c.Era }))}
 
-        Return the JSON list of IDs (max {quantity}) that match the vibe.
+        INSTRUCTIONS:
+        1. Select EXACTLY {quantity} artists that best match the criteria.
+        2. Return ONLY a raw JSON array of strings, where each string is the exact 'Id' from the candidates.
+        3. Do NOT include markdown formatting (like ```json).
+        4. If you can't find enough perfect matches, pick the closest ones.
         ";
 
-        // Mock filtering by just taking the requested quantity
-        return Task.FromResult(candidates.Take(quantity).ToList());
+        try 
+        {
+            var result = await _chatCompletionService.GetChatMessageContentAsync(prompt);
+            var responseText = result.Content?.Trim() ?? "[]";
+
+            // Clean Markdown if present
+            if (responseText.StartsWith("```"))
+            {
+                var lines = responseText.Split('\n').ToList();
+                if (lines.Count > 2)
+                {
+                    // Remove first and last line
+                    responseText = string.Join("\n", lines.Skip(1).Take(lines.Count - 2));
+                }
+            }
+
+            var selectedIds = System.Text.Json.JsonSerializer.Deserialize<List<string>>(responseText);
+            
+            if (selectedIds != null && selectedIds.Any())
+            {
+                // Preserve order from Gemini, but lookup actual objects
+                var filtered = new List<ArtistNode>();
+                foreach (var id in selectedIds)
+                {
+                    var match = candidates.FirstOrDefault(c => c.Id == id);
+                    if (match != null) filtered.Add(match);
+                }
+                return filtered;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Gemini Error: {ex.Message}");
+        }
+
+        // Fallback: Just take top N
+        return candidates.Take(quantity).ToList();
+    }
+
+    public async Task<string> ExplainConnectionAsync(string source, string target)
+    {
+        var prompt = $@"
+        You are a knowledgeable music critic.
+        Explain the detailed musical connection between {source} and {target} in ONE sentence.
+        
+        Guidelines:
+        - Mention specific sub-genres, instrumentation, or moods they share.
+        - Be insightful rather than generic.
+        - Avoid starting with ""Both artists"".
+        - Keep it under 35 words.
+
+        Example good output: ""Radiohead's experimental electronic textures in their later albums deeply influenced the atmospheric soundscapes of The Smile.""
+        ";
+
+        try
+        {
+            var result = await _chatCompletionService.GetChatMessageContentAsync(prompt);
+            return result.Content?.Trim() ?? $"{source} and {target} share a distinct musical style.";
+        }
+        catch (Exception ex)
+        {
+            // Debugging: Return the actual error to the UI
+            return $"AI Error: {ex.Message}";
+        }
     }
     
     // --- New Helper to fetch data including images ---
