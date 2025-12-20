@@ -88,7 +88,7 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction: 'HOZ' | 'V
 
 
 function App() {
-  const { nodes, setGraph, appendGraph, toggleFavorite, removeNode, getDescendants, undo, redo } = useGraphStore();
+  const { nodes, appendGraph, toggleFavorite, removeNode, getDescendants, undo, redo } = useGraphStore();
   const [modalOpen, setModalOpen] = useState(nodes.length === 0);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [deleteCandidate, setDeleteCandidate] = useState<string | null>(null);
@@ -143,7 +143,7 @@ function App() {
     console.log("Discovering for:", seed, quantity, obscure, eraMatch, enableAI);
 
     try {
-      const response = await fetch('http://localhost:5111/api/discovery/recommend', {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5111'}/api/discovery/recommend`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -214,7 +214,7 @@ function App() {
 
         try {
           const seedDetailsParams = new URLSearchParams({ artist: seed });
-          const seedRes = await fetch(`http://localhost:5111/api/discovery/artist-details?${seedDetailsParams}`);
+          const seedRes = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5111'}/api/discovery/artist-details?${seedDetailsParams}`);
           if (seedRes.ok) {
             const seedData = await seedRes.json();
             if (seedData.tags && seedData.tags.length > 0) {
@@ -391,7 +391,7 @@ function App() {
       <MusicGraph
         width={dimensions.w}
         height={dimensions.h}
-        onNodeClick={(event, node) => {
+        onNodeClick={(_, node) => {
           // DEBOUNCED CLICK LOGIC
           const now = Date.now();
           const lastTime = lastClickTime.current;
@@ -438,7 +438,7 @@ function App() {
           useGraphStore.getState().selectNode(null);
           setPreviewArtist(null);
         }}
-        onNodeDoubleClick={(event, node) => {
+        onNodeDoubleClick={(event, _) => {
           // Explicitly ignore native double click, we handle it via debounce above
           // preventing the race condition where Single triggers Sidebar BEFORE Double triggers Discover
           event.preventDefault();

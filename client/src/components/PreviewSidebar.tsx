@@ -30,8 +30,8 @@ const PreviewSidebar: React.FC<PreviewSidebarProps> = ({ artistName, onClose, in
 
             // Parallel fetch for speed
             Promise.all([
-                fetch(`http://localhost:5111/api/discovery/tracks?artist=${encodeURIComponent(artistName)}`).then(res => res.json()),
-                fetch(`http://localhost:5111/api/discovery/artist-details?artist=${encodeURIComponent(artistName)}`).then(res => res.json())
+                fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5111'}/api/discovery/tracks?artist=${encodeURIComponent(artistName)}`).then(res => res.json()),
+                fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5111'}/api/discovery/artist-details?artist=${encodeURIComponent(artistName)}`).then(res => res.json())
             ])
                 .then(([tracksData, detailsData]) => {
                     // Process Tracks
