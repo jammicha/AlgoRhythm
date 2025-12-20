@@ -12,7 +12,7 @@ const PreviewSidebar: React.FC<PreviewSidebarProps> = ({ artistName, onClose, in
     const [activeTab, setActiveTab] = useState<'tracks' | 'overview'>('overview');
     const [playingIndex, setPlayingIndex] = useState<number | null>(null);
     const [tracks, setTracks] = useState<{ title: string; plays: string; duration: string; previewUrl: string }[]>([]);
-    const [details, setDetails] = useState<{ bio: string; playcount: string; listeners: string; tags: string[] } | null>(null);
+    const [details, setDetails] = useState<{ bio: string; playcount: string; listeners: string; tags: string[]; imageUrl?: string } | null>(null);
     const [loading, setLoading] = useState(false);
     const [audio, setAudio] = useState<HTMLAudioElement | null>(null);
 
@@ -48,7 +48,8 @@ const PreviewSidebar: React.FC<PreviewSidebarProps> = ({ artistName, onClose, in
                         bio: detailsData.bio || detailsData.Bio,
                         playcount: detailsData.playcount || detailsData.Playcount,
                         listeners: detailsData.listeners || detailsData.Listeners,
-                        tags: detailsData.tags || detailsData.Tags || []
+                        tags: detailsData.tags || detailsData.Tags || [],
+                        imageUrl: detailsData.imageUrl || detailsData.ImageUrl
                     });
                 })
                 .catch(err => {
@@ -99,7 +100,7 @@ const PreviewSidebar: React.FC<PreviewSidebarProps> = ({ artistName, onClose, in
                     <div className="absolute inset-0 bg-gradient-to-t from-surface to-transparent z-10" />
                     {artistName && (
                         <img
-                            src={`https://placehold.co/400x200?text=${artistName}`}
+                            src={details?.imageUrl || `https://placehold.co/400x200?text=${artistName}`}
                             alt={artistName}
                             className="w-full h-full object-cover opacity-60"
                         />

@@ -1,0 +1,16 @@
+[
+  {
+    "id": "29f7e58f-d626-4548-ae3b-e408c4587428",
+    "name": "Thom Yorke",
+    "imageUrl": "https://lastfm.freetls.fastly.net/i/u/174s/2a96cbd8b46e442fc41c2b86b821562f.png",
+    "isFavorited": false,
+    "tags": [
+      "Artist"
+    ],
+    "era": "2020s",
+    "audioFeatures": {
+      "valence": 0.5,
+      "energy": 0.5
+    }
+  }
+]

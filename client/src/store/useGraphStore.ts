@@ -181,6 +181,8 @@ export const useGraphStore = create<GraphState>()(
                             data: {
                                 ...existing.data,
                                 ...newNode.data,
+                                // PROTECT IMAGE: Don't overwrite existing valid image with empty new one
+                                img: newNode.data.img || existing.data.img,
                                 // Special handling for flags to ensure true > false?
                                 // If incoming isManual is true, we want to set it.
                                 isManual: existing.data.isManual || newNode.data.isManual,

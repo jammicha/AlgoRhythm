@@ -188,8 +188,8 @@ function App() {
             y: center.y + Math.sin(angle) * radius + (Math.random() * 50 - 25)
           },
           data: {
-            label: artist.name,
-            img: artist.imageUrl,
+            label: artist.name || artist.Name,
+            img: artist.imageUrl || artist.ImageUrl,
             isFavorited: existingNode?.data?.isFavorited || artist.isFavorited, // Preserve favorite status if merging
             tags: artist.tags,
             isManual: existingNode?.data?.isManual || false
@@ -220,8 +220,9 @@ function App() {
             if (seedData.tags && seedData.tags.length > 0) {
               seedTags = seedData.tags.slice(0, 3); // Take top 3 tags
             }
-            // We could also get a real image if we had a provider, but for now placeholder is fine 
-            // or we could use the Last.fm image if the backend proxy returned it (it doesn't yet).
+            if (seedData.imageUrl || seedData.ImageUrl) {
+              seedImg = seedData.imageUrl || seedData.ImageUrl;
+            }
           }
         } catch (err) {
           console.warn("Failed to fetch seed details", err);

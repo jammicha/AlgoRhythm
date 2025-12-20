@@ -20,8 +20,13 @@ builder.Services.AddHttpClient("LastFm", client =>
 {
     client.DefaultRequestHeaders.Add("User-Agent", "Algorhythm/1.0 (Integration Test)");
 });
+builder.Services.AddHttpClient("Spotify", client =>
+{
+    client.DefaultRequestHeaders.Add("User-Agent", "Algorhythm/1.0");
+});
 
 builder.Services.AddScoped<MusicIntelligenceService>();
+builder.Services.AddScoped<ISpotifyService, SpotifyService>();
 
 // CORS
 builder.Services.AddCors(options =>

@@ -10,13 +10,20 @@ public class MusicIntelligenceService
     private readonly Kernel _kernel;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly string _lastFmApiKey;
+    private readonly ISpotifyService _spotifyService;
 
-    public MusicIntelligenceService(Kernel kernel, IChatCompletionService chatCompletionService, IHttpClientFactory httpClientFactory, IConfiguration configuration)
+    public MusicIntelligenceService(
+        Kernel kernel, 
+        IChatCompletionService chatCompletionService, 
+        IHttpClientFactory httpClientFactory, 
+        IConfiguration configuration,
+        ISpotifyService spotifyService)
     {
         _kernel = kernel;
         _chatCompletionService = chatCompletionService;
         _httpClientFactory = httpClientFactory;
         _lastFmApiKey = configuration["LastFm:ApiKey"] ?? "";
+        _spotifyService = spotifyService;
     }
 
     public async Task<List<ArtistNode>> GetRecommendationsAsync(string seedArtist, float targetValence, float targetEnergy, bool obscure, int quantity, bool eraMatch, bool enableAI)
@@ -24,7 +31,7 @@ public class MusicIntelligenceService
         // 1. Fetch similar artists from Last.fm (Name + ImageUrl)
         var candidates = await FetchSimilarArtistsWithImagesAsync(seedArtist);
 
-        // 2. Mock Spotify feature enrichment (receiving tuples now)
+        // 2. Real Spotify feature enrichment
         var enriched = await EnrichWithAudioFeaturesAsync(candidates);
 
         // 3. Filter with Gemini 3.0 Pro OR return raw list
@@ -41,36 +48,13 @@ public class MusicIntelligenceService
 
     private async Task<List<string>> FetchSimilarArtistsAsync(string artist)
     {
-        // ... (existing fallback logic unchanged) ...
-        if (string.IsNullOrEmpty(_lastFmApiKey) || _lastFmApiKey.Contains("YOUR_LASTFM_API_KEY"))
-        {
-            return new List<string> { "Radiohead", "The Smile", "Atoms for Peace", "Thom Yorke", "Alt-J" };
-        }
-
-        try
-        {
-            var client = _httpClientFactory.CreateClient("LastFm");
-            var url = $"http://ws.audioscrobbler.com/2.0/?method=artist.getsimilar&artist={Uri.EscapeDataString(artist)}&api_key={_lastFmApiKey}&format=json&limit=20";
-            var response = await client.GetFromJsonAsync<LastFmResponse>(url);
-            
-            // Should verify if we can return objects here instead of just strings
-            // But GetRecommendationsAsync expects ArtistNode.
-            // Wait, this method only returns List<string>. We need to change it to return richer objects 
-            // OR we store a dictionary of images to look up later.
-            // For now, let's keep it simple: DTOs inside EnrichWithAudioFeaturesAsync will just use placeholder.
-            // ACTUALLY: limiting to just names here prevents us from using the images we just fetched.
-            // I should refactor this to return a list of (Name, ImageUrl).
-            
-            return response?.Similarartists?.Artist?.Select(a => a.Name).ToList() ?? new List<string>();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Last.fm Error: {ex.Message}");
-            return new List<string> { "Error Fetching Data" };
-        }
+        // Keeping this for backward compatibility if needed, but main logic uses FetchSimilarArtistsWithImagesAsync
+        var results = await FetchSimilarArtistsWithImagesAsync(artist);
+        return results.Select(r => r.Name).ToList();
     }
 
-    // --- Top Tracks Logic (iTunes for Audio Previews) ---
+    // --- Top Tracks Logic (Originally iTunes, now Spotify) ---
+    // --- Top Tracks Logic (Reverted to iTunes for reliable Audio Previews) ---
     public async Task<List<TrackDto>> GetTopTracksAsync(string artist)
     {
         try
@@ -82,7 +66,7 @@ public class MusicIntelligenceService
 
             return response?.Results?.Select(t => new TrackDto(
                 t.TrackName, 
-                "Popular", // iTunes doesn't expose playcounts publicly, implies popularity by rank
+                "Popular", // iTunes doesn't expose playcounts publicly
                 TimeSpan.FromMilliseconds(t.TrackTimeMillis).ToString(@"m\:ss"),
                 t.PreviewUrl
             )).ToList() ?? new List<TrackDto>();
@@ -102,26 +86,76 @@ public class MusicIntelligenceService
         public string PreviewUrl { get; set; } = "";
     }
 
-    private Task<List<ArtistNode>> EnrichWithAudioFeaturesAsync(List<(string Name, string ImageUrl)> artists)
+    private async Task<List<ArtistNode>> EnrichWithAudioFeaturesAsync(List<(string Name, string ImageUrl)> artists)
     {
-        var rng = new Random();
-        var nodes = artists.Select(a => new ArtistNode(
-            Id: Guid.NewGuid().ToString(),
-            Name: a.Name,
-            ImageUrl: !string.IsNullOrEmpty(a.ImageUrl) ? a.ImageUrl : $"https://placehold.co/200x200?text={a.Name}",
-            IsFavorited: false,
-            Tags: new List<string> { "Artist" }, 
-            Era: "2020s",
-            AudioFeatures: new AudioFeatures(
-                Valence: (float)rng.NextDouble(),
-                Energy: (float)rng.NextDouble()
-            )
-        )).ToList();
+        var nodes = new System.Collections.Concurrent.ConcurrentBag<ArtistNode>();
+        var sem = new SemaphoreSlim(5); // Concurrency limit
+        var tasks = artists.Take(20).Select(async artist => 
+        {
+            await sem.WaitAsync();
+            try
+            {
+                float valence = 0.5f;
+                float energy = 0.5f;
+                string finalImage = artist.ImageUrl;
 
-        return Task.FromResult(nodes);
+                try
+                {
+                    // 1. Search (Cache this typically, but for now direct)
+                    var spotifyArtist = await _spotifyService.SearchArtistAsync(artist.Name);
+                    
+                    if (spotifyArtist != null)
+                    {
+                        // Upgrade Image
+                        if (spotifyArtist.Images != null && spotifyArtist.Images.Any())
+                        {
+                            finalImage = spotifyArtist.Images.First().Url;
+                        }
+
+                        // 2. Audio Features
+                        var topTracks = await _spotifyService.GetTopTracksAsync(spotifyArtist.Id);
+                        if (topTracks.Any())
+                        {
+                            var featureIds = topTracks.Take(3).Select(t => t.Id);
+                            var features = await _spotifyService.GetAudioFeaturesForTracksAsync(featureIds);
+                            
+                            if (features.Any())
+                            {
+                                valence = features.Average(f => f.Valence);
+                                energy = features.Average(f => f.Energy);
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error enriching {artist.Name}: {ex.Message}");
+                }
+
+                // Log result for debugging
+                Console.WriteLine($"[Enrich] {artist.Name} -> Img: {(!string.IsNullOrEmpty(finalImage) ? "Yes" : "No")} ({finalImage}), V: {valence:F2}, E: {energy:F2}");
+
+                nodes.Add(new ArtistNode(
+                    id: Guid.NewGuid().ToString(),
+                    name: artist.Name,
+                    imageUrl: !string.IsNullOrEmpty(finalImage) ? finalImage : $"https://placehold.co/200x200?text={Uri.EscapeDataString(artist.Name)}",
+                    isFavorited: false,
+                    tags: new List<string> { "Artist" }, 
+                    era: "2020s",
+                    audioFeatures: new AudioFeatures(valence, energy)
+                ));
+            }
+            finally
+            {
+                sem.Release();
+            }
+        });
+
+        await Task.WhenAll(tasks);
+        return nodes.ToList();
     }
 
-    private async Task<List<ArtistNode>> FilterWithGeminiAsync(List<ArtistNode> candidates, float valence, float energy, bool obscure, int quantity, bool eraMatch)
+    private Task<List<ArtistNode>> FilterWithGeminiAsync(List<ArtistNode> candidates, float valence, float energy, bool obscure, int quantity, bool eraMatch)
     {
         // For scaffold, we'll just take the top N to show the slider working.
         // In real impl, we'd add these to the prompt.
@@ -140,7 +174,7 @@ public class MusicIntelligenceService
         ";
 
         // Mock filtering by just taking the requested quantity
-        return candidates.Take(quantity).ToList();
+        return Task.FromResult(candidates.Take(quantity).ToList());
     }
     
     // --- New Helper to fetch data including images ---
@@ -188,6 +222,18 @@ public class MusicIntelligenceService
             var info = response?.Artist;
 
             var imageUrl = info?.Image?.FirstOrDefault(i => i.Size == "extralarge" || i.Size == "mega")?.Text ?? "";
+
+            // Spotify Fallback/Upgrade for Image
+            try 
+            {
+               var spotifyArtist = await _spotifyService.SearchArtistAsync(artist);
+               if (spotifyArtist?.Images?.Any() == true)
+               {
+                   // Spotify images are generally higher res/better than Last.fm
+                   imageUrl = spotifyArtist.Images.First().Url;
+               }
+            }
+            catch {} // Fallback is optional, don't break if Spotify fails
 
             return new ArtistDetailsDto(
                 info?.Name ?? artist,
